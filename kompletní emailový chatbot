@@ -1,0 +1,175 @@
+# První buňka - instalace potřebných knihoven
+!pip install aiosmtpd
+
+# Druhá buňka - kompletní kód
+import asyncio
+from aiosmtpd.controller import Controller
+from aiosmtpd.handlers import Message
+import email
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+import threading
+import smtplib
+import time
+import re
+import logging
+from google.colab import output
+import sys
+
+# Nastavení logování
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    stream=sys.stdout
+)
+
+class TestEmailHandler:
+    def __init__(self):
+        self.messages = []
+        self.logger = logging.getLogger(__name__)
+        
+    async def handle_RCPT(self, server, session, envelope, address, rcpt_options):
+        envelope.rcpt_tos.append(address)
+        return '250 OK'
+
+    async def handle_DATA(self, server, session, envelope):
+        self.messages.append(envelope)
+        self.logger.info(f"Přijat nový email od: {envelope.mail_from}")
+        return '250 Message accepted for delivery'
+
+class EmailServer:
+    def __init__(self, host='localhost', smtp_port=1025):
+        self.host = host
+        self.smtp_port = smtp_port
+        self.handler = TestEmailHandler()
+        self.controller = Controller(self.handler, hostname=host, port=smtp_port)
+        self.logger = logging.getLogger(__name__)
+        
+    def start(self):
+        self.controller.start()
+        self.logger.info(f"SMTP server běží na {self.host}:{self.smtp_port}")
+        
+    def stop(self):
+        self.controller.stop()
+        self.logger.info("SMTP server zastaven")
+        
+    def get_messages(self):
+        return self.handler.messages
+
+class EmailChatbot:
+    def __init__(self, smtp_host='localhost', smtp_port=1025):
+        self.smtp_host = smtp_host
+        self.smtp_port = smtp_port
+        self.logger = logging.getLogger(__name__)
+
+    def generate_response(self, subject, body):
+        """Generování odpovědi na základě obsahu emailu"""
+        if re.search(r'ceník|cena|ceny', body.lower()):
+            return "Děkujeme za Váš dotaz ohledně cen. Náš aktuální ceník najdete na našem webu."
+        elif re.search(r'dostupnost|skladem', body.lower()):
+            return "Děkujeme za Váš dotaz ohledně dostupnosti. Zkontrolujeme skladové zásoby."
+        elif re.search(r'reklamace', body.lower()):
+            return "Vaši reklamaci evidujeme. Ozveme se Vám do 24 hodin."
+        else:
+            return "Děkujeme za Váš email. Brzy se Vám ozveme."
+
+    def send_response(self, to_address, subject, response_text):
+        """Odeslání odpovědi"""
+        try:
+            msg = MIMEMultipart()
+            msg['From'] = "bot@example.com"
+            msg['To'] = to_address
+            msg['Subject'] = f"Re: {subject}"
+            msg.attach(MIMEText(response_text, 'plain'))
+
+            with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
+                server.send_message(msg)
+                self.logger.info(f"✓ Odpověď odeslána na: {to_address}")
+                return True
+        except Exception as e:
+            self.logger.error(f"✗ Chyba při odesílání odpovědi: {str(e)}")
+            return False
+
+def send_test_email(smtp_host='localhost', smtp_port=1025, subject="Test", body="Test message"):
+    """Funkce pro odeslání testovacího emailu"""
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = "test@example.com"
+        msg['To'] = "bot@example.com"
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'plain'))
+        
+        with smtplib.SMTP(smtp_host, smtp_port) as server:
+            server.send_message(msg)
+            print(f"✓ Testovací email odeslán: {subject}")
+            return True
+    except Exception as e:
+        print(f"✗ Chyba při odesílání testovacího emailu: {str(e)}")
+        return False
+
+def run_test_scenario():
+    # Spuštění email serveru
+    server = EmailServer()
+    server.start()
+    
+    # Vytvoření instance chatbota
+    chatbot = EmailChatbot()
+    
+    # Testovací scénáře
+    test_scenarios = [
+        {
+            'subject': 'Dotaz na cenu',
+            'body': 'Dobrý den, jaký je ceník vašich služeb?'
+        },
+        {
+            'subject': 'Dostupnost zboží',
+            'body': 'Je produkt XYZ skladem?'
+        },
+        {
+            'subject': 'Reklamace',
+            'body': 'Chci reklamovat produkt.'
+        },
+        {
+            'subject': 'Obecný dotaz',
+            'body': 'Dobrý den, potřebuji poradit.'
+        }
+    ]
+    
+    try:
+        print("\n=== Začínám testování chatbota ===\n")
+        
+        for scenario in test_scenarios:
+            print(f"\n--- Testovací scénář: {scenario['subject']} ---")
+            
+            # Odeslání testovacího emailu
+            send_test_email(subject=scenario['subject'], body=scenario['body'])
+            
+            # Počkáme na zpracování
+            time.sleep(1)
+            
+            # Získání poslední zprávy
+            messages = server.get_messages()
+            if messages:
+                last_message = messages[-1]
+                print(f"Přijatý email od: {last_message.mail_from}")
+                print(f"Text zprávy: {last_message.content.decode()}")
+                
+                # Vygenerování a odeslání odpovědi
+                response = chatbot.generate_response(scenario['subject'], scenario['body'])
+                print(f"Vygenerovaná odpověď: {response}")
+                
+                chatbot.send_response(
+                    "test@example.com",
+                    scenario['subject'],
+                    response
+                )
+            
+            print("-------------------")
+            
+    finally:
+        server.stop()
+        print("\n=== Testování dokončeno ===")
+
+# Spuštění testů
+if __name__ == "__main__":
+    run_test_scenario()
